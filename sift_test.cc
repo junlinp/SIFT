@@ -40,7 +40,7 @@ TEST(Gaussian, Blur) {
 TEST(Match, match) {
     std::vector<Descriptor> lhs;
     std::vector<int> shuffle;
-    int n = 2048;
+    int n = 8196;
     std::default_random_engine engine;
     std::uniform_real_distribution<float> uniform_d(0, 255);
     for(int i = 0 ; i < n; i++) {
@@ -60,7 +60,7 @@ TEST(Match, match) {
     }
 
     std::vector<int> match_idx;
-    match(rhs, lhs, match_idx);
+    match3(rhs, lhs, match_idx);
 
     for(int i = 0; i < n; i++) {
         EXPECT_EQ(match_idx[i], shuffle[i]);
