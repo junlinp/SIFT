@@ -2,6 +2,7 @@
 #include "opencv2/imgcodecs.hpp"
 #include "opencv2/imgproc.hpp"
 #include "sift.h"
+#include "matcher.h"
 TEST(sym, t) {
     int row = 16;
 
@@ -35,7 +36,37 @@ TEST(Gaussian, Blur) {
     cv::imwrite(std::string(Test_DIR) + "/a_blur_opencv.jpg", opencv_output);
 
 }
+#include <random>
+TEST(Match, match) {
+    std::vector<Descriptor> lhs;
+    std::vector<int> shuffle;
+    int n = 2048;
+    std::default_random_engine engine;
+    std::uniform_real_distribution<float> uniform_d(0, 255);
+    for(int i = 0 ; i < n; i++) {
+        Descriptor d;
+        for(int k = 0; k < 128; k++) {
+            d[k] = uniform_d(engine);
+        }
+        lhs.push_back(d);
+        shuffle.push_back(i);
+    };
+    std::random_device rd;
+    std::mt19937 g(rd());
+    std::shuffle(shuffle.begin(), shuffle.end(), engine);
+    std::vector<Descriptor> rhs;
+    for(int i = 0; i < n; i++) {
+        rhs.push_back(lhs[shuffle[i]]);
+    }
 
+    std::vector<int> match_idx;
+    match(rhs, lhs, match_idx);
+
+    for(int i = 0; i < n; i++) {
+        EXPECT_EQ(match_idx[i], shuffle[i]);
+    }
+
+}
 int main() {
     testing::InitGoogleTest();
     return RUN_ALL_TESTS();

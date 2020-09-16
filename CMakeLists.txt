@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.0)
 project(sift)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 14)
 find_package(OpenCV REQUIRED)
 find_package(GTest REQUIRED)
 add_library(${PROJECT_NAME} sift.cc)
