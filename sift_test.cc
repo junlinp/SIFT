@@ -3,6 +3,23 @@
 #include "opencv2/imgproc.hpp"
 #include "sift.h"
 #include "matcher.h"
+
+class TimeUse {
+
+public:
+    TimeUse() {
+        start_ = std::chrono::high_resolution_clock::now();
+    }
+    ~TimeUse() {
+        std::chrono::milliseconds duration = 
+            std::chrono::duration_cast<std::chrono::milliseconds>  (std::chrono::high_resolution_clock::now() - start_);
+        std::cout << "Time excaped :" << duration.count() << " milliseconds" << std::endl;
+    }
+
+private:
+    std::chrono::steady_clock::time_point start_;
+};
+
 TEST(sym, t) {
     int row = 16;
 
@@ -40,7 +57,7 @@ TEST(Gaussian, Blur) {
 TEST(Match, match) {
     std::vector<Descriptor> lhs;
     std::vector<int> shuffle;
-    int n = 8196;
+    int n = 1024 * 16;
     std::default_random_engine engine;
     std::uniform_real_distribution<float> uniform_d(0, 255);
     for(int i = 0 ; i < n; i++) {
@@ -60,7 +77,18 @@ TEST(Match, match) {
     }
 
     std::vector<int> match_idx;
-    match3(rhs, lhs, match_idx);
+    {
+        TimeUse t;
+        match5(rhs, lhs, match_idx);
+        std::cout << "match 5 : " << std::endl;
+    }
+    {
+        TimeUse t;
+        match3(rhs, lhs, match_idx);
+        std::cout << "match 3 : " << std::endl;
+    }
+
+
 
     for(int i = 0; i < n; i++) {
         EXPECT_EQ(match_idx[i], shuffle[i]);

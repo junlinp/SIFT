@@ -3,7 +3,90 @@
 
 #include <algorithm>
 #include <array>
+#include <condition_variable>
+#include <future>
+#include <mutex>
+#include <queue>
+#include <thread>
 #include <vector>
+
+class ThreadPool {
+ public:
+  ThreadPool(size_t max_thread_num = 1)
+      : max_thread_num_(max_thread_num), b_stop(false) {
+    auto thread_base_task = [this]() {
+      while (true) {
+        std::function<void(void)> task;
+        {
+          std::unique_lock<std::mutex> ulk(mutex_);
+          cv_.wait(ulk, [this]() { return b_stop || !tasks.empty(); });
+
+          if (b_stop && tasks.empty()) {
+            return;
+          }
+          task = std::move(tasks.front());
+          tasks.pop();
+        }
+        task();
+      }
+    };
+    for (size_t i = 0; i < max_thread_num_; i++) {
+      works.emplace_back(thread_base_task);
+    }
+  }
+  ~ThreadPool() {
+    {
+      std::unique_lock<std::mutex> ulk(mutex_);
+      b_stop = true;
+      cv_.notify_all();
+    }
+    for (auto& thread : works) {
+      thread.join();
+    }
+  }
+  template <class Functor, class... Args,
+            class ReturnType =
+                std::result_of_t<std::remove_reference_t<Functor>(Args...)>>
+  std::future<ReturnType> Enqueue(Functor&& functor, Args&&... args) {
+    auto f =
+        std::bind(std::forward<Functor>(functor), std::forward<Args>(args)...);
+    auto task = std::make_shared<std::packaged_task<ReturnType()>>(f);
+    auto future = task->get_future();
+    {
+      std::unique_lock<std::mutex> ulk(mutex_);
+      if (b_stop) {
+        throw std::runtime_error("ThreadPool has stopped.");
+      }
+      tasks.push([task]() { (*task)(); });
+    }
+    cv_.notify_one();
+    return future;
+  }
+
+  template <class Functor, class ReturnType = std::result_of_t<
+                               std::remove_reference_t<Functor>()>>
+  std::future<ReturnType> Enqueue(Functor&& functor) {
+    auto task = std::make_shared<std::packaged_task<ReturnType()>>(functor);
+    auto future = task->get_future();
+    {
+      std::unique_lock<std::mutex> ulk(mutex_);
+      if (b_stop) {
+        throw std::runtime_error("ThreadPool has stopped.");
+      }
+      tasks.push([task]() { (*task)(); });
+    }
+    cv_.notify_one();
+    return future;
+  }
+
+ private:
+  size_t max_thread_num_;
+  std::queue<std::function<void(void)>> tasks;
+  std::vector<std::thread> works;
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  bool b_stop;
+};
 
 using Descriptor = std::array<float, 128>;
 
@@ -84,8 +167,8 @@ void match2(std::vector<Descriptor>& lhs, std::vector<Descriptor>& rhs,
         second_min_distance[i] = sum;
         second_min_index[i] = j;
         if (second_min_distance[i] < min_distance[i]) {
-            std::swap(second_min_distance[i], min_distance[i]);
-            std::swap(second_min_index[i], min_index[i]);
+          std::swap(second_min_distance[i], min_distance[i]);
+          std::swap(second_min_index[i], min_index[i]);
         }
       }
     }
@@ -115,8 +198,54 @@ void match3(std::vector<Descriptor>& lhs, std::vector<Descriptor>& rhs,
     min_index[i] = -1;
     second_min_distance[i] = 1e300;
     second_min_index[i] = -1;
+    float* p1_ptr = lhs[i].begin();
     for (int j = 0; j < rhs.size(); j++) {
+      __m256 m_sum = _mm256_setzero_ps();
+      for (int d = 0; d < 128; d += 8) {
+        __m256 v1 = _mm256_load_ps(p1_ptr + d);
+        __m256 v2 = _mm256_load_ps(rhs[j].begin() + d);
+        __m256 sub = _mm256_sub_ps(v1, v2);
+        m_sum = _mm256_fmadd_ps(sub, sub, m_sum);
+      }
+      m_sum = _mm256_add_ps(m_sum, _mm256_permute2f128_ps(m_sum, m_sum, 1));
+      m_sum = _mm256_hadd_ps(m_sum, m_sum);
+      float sum = _mm256_cvtss_f32(_mm256_hadd_ps(m_sum, m_sum));
 
+      if (sum < second_min_distance[i]) {
+        second_min_distance[i] = sum;
+        second_min_index[i] = j;
+        if (second_min_distance[i] < min_distance[i]) {
+          std::swap(second_min_distance[i], min_distance[i]);
+          std::swap(second_min_index[i], min_index[i]);
+        }
+      }
+    }
+  }
+
+  for (int i = 0; i < lhs.size(); i++) {
+    // match_idx[i] = min_index[i];
+    if (min_distance[i] < 0.6 * second_min_distance[i]) {
+      match_idx[i] = min_index[i];
+    } else {
+      match_idx[i] = -1;
+    }
+  }
+}
+void match4(std::vector<Descriptor>& lhs, std::vector<Descriptor>& rhs,
+            std::vector<int>& match_idx) {
+  match_idx.resize(lhs.size());
+
+  std::vector<int> min_index(lhs.size());
+  std::vector<double> min_distance(lhs.size());
+  std::vector<int> second_min_index(lhs.size());
+  std::vector<double> second_min_distance(lhs.size());
+
+  auto functor = [&](int i) {
+    min_distance[i] = 1e300;
+    min_index[i] = -1;
+    second_min_distance[i] = 1e300;
+    second_min_index[i] = -1;
+    for (int j = 0; j < rhs.size(); j++) {
       __m256 m_sum = _mm256_setzero_ps();
       for (int d = 0; d < 128; d += 8) {
         __m256 v1 = _mm256_load_ps(lhs[i].begin() + d);
@@ -132,13 +261,72 @@ void match3(std::vector<Descriptor>& lhs, std::vector<Descriptor>& rhs,
         second_min_distance[i] = sum;
         second_min_index[i] = j;
         if (second_min_distance[i] < min_distance[i]) {
-            std::swap(second_min_distance[i], min_distance[i]);
-            std::swap(second_min_index[i], min_index[i]);
+          std::swap(second_min_distance[i], min_distance[i]);
+          std::swap(second_min_index[i], min_index[i]);
+        }
+      }
+    }
+  };
+
+  {
+    ThreadPool thread_pool;
+    for (int i = 0; i < lhs.size(); i++) thread_pool.Enqueue(functor, i);
+  }
+
+  for (int i = 0; i < lhs.size(); i++) {
+    // match_idx[i] = min_index[i];
+    if (min_distance[i] < 0.6 * second_min_distance[i]) {
+      match_idx[i] = min_index[i];
+    } else {
+      match_idx[i] = -1;
+    }
+  }
+}
+void match5(std::vector<Descriptor>& lhs, std::vector<Descriptor>& rhs,
+            std::vector<int>& match_idx) {
+  match_idx.resize(lhs.size());
+
+  std::vector<int> min_index(lhs.size());
+  std::vector<double> min_distance(lhs.size());
+  std::vector<int> second_min_index(lhs.size());
+  std::vector<double> second_min_distance(lhs.size());
+
+  const int BATCH_SIZE = 512;
+  for (int i = 0; i < lhs.size(); i++) {
+    min_distance[i] = 1e300;
+    min_index[i] = -1;
+    second_min_distance[i] = 1e300;
+    second_min_index[i] = -1;
+  }
+  for (int b1 = 0; b1 < lhs.size(); b1 += BATCH_SIZE) {
+    for (int b2 = 0; b2 < rhs.size(); b2 += BATCH_SIZE) {
+      for (int i = b1; i < b1 + BATCH_SIZE; i++) {
+        float* p1_ptr = lhs[i].begin();
+        for (int j = b2; j < b2 + BATCH_SIZE; j++) {
+          float* p2_ptr = rhs[j].begin();
+          __m256 m_sum = _mm256_setzero_ps();
+          for (int d = 0; d < 128; d += 8) {
+            __m256 v1 = _mm256_load_ps(p1_ptr + d);
+            __m256 v2 = _mm256_load_ps(p2_ptr + d);
+            __m256 sub = _mm256_sub_ps(v1, v2);
+            m_sum = _mm256_fmadd_ps(sub, sub, m_sum);
+          }
+          m_sum = _mm256_add_ps(m_sum, _mm256_permute2f128_ps(m_sum, m_sum, 1));
+          m_sum = _mm256_hadd_ps(m_sum, m_sum);
+          float sum = _mm256_cvtss_f32(_mm256_hadd_ps(m_sum, m_sum));
+
+          if (sum < second_min_distance[i]) {
+            second_min_distance[i] = sum;
+            second_min_index[i] = j;
+            if (second_min_distance[i] < min_distance[i]) {
+              std::swap(second_min_distance[i], min_distance[i]);
+              std::swap(second_min_index[i], min_index[i]);
+            }
+          }
         }
       }
     }
   }
-
   for (int i = 0; i < lhs.size(); i++) {
     // match_idx[i] = min_index[i];
     if (min_distance[i] < 0.6 * second_min_distance[i]) {
