@@ -343,6 +343,8 @@ void match5(std::vector<Descriptor>& lhs, std::vector<Descriptor>& rhs,
     }
   }
 }
+
+// using assmbly code
 void match6(std::vector<Descriptor>& lhs, std::vector<Descriptor>& rhs,
             std::vector<int>& match_idx) {
   match_idx.resize(lhs.size());
@@ -359,30 +361,46 @@ void match6(std::vector<Descriptor>& lhs, std::vector<Descriptor>& rhs,
     second_min_distance[i] = 1e300;
     second_min_index[i] = -1;
   }
+
   for (int b1 = 0; b1 < lhs.size(); b1 += BATCH_SIZE) {
     for (int b2 = 0; b2 < rhs.size(); b2 += BATCH_SIZE) {
       for (int i = b1; i < b1 + BATCH_SIZE; i++) {
         float* p1_ptr = lhs[i].begin();
         for (int j = b2; j < b2 + BATCH_SIZE; j++) {
           float* p2_ptr = rhs[j].begin();
-          __m256 m_sum = _mm256_setzero_ps();
-          __m256 m_sum2 = _mm256_setzero_ps();
-          // unroll by hand
-          
-          for (int d = 0; d < 128; d += 16) {
-            __m256 v1 = _mm256_load_ps(p1_ptr + d);
-            __m256 v2 = _mm256_load_ps(p2_ptr + d);
-            __m256 sub = _mm256_sub_ps(v1, v2);
-            m_sum = _mm256_fmadd_ps(sub, sub, m_sum);
-            __m256 v3 = _mm256_load_ps(p1_ptr + d + 8);
-            __m256 v4 = _mm256_load_ps(p2_ptr + d + 8);
-            __m256 sub2 = _mm256_sub_ps(v3, v4); 
-            m_sum2 = _mm256_fmadd_ps(sub2, sub2, m_sum2);
-          }
-          m_sum = _mm256_add_ps(m_sum, m_sum2);
-          m_sum = _mm256_add_ps(m_sum, _mm256_permute2f128_ps(m_sum, m_sum, 1));
-          m_sum = _mm256_hadd_ps(m_sum, m_sum);
-          float sum = _mm256_cvtss_f32(_mm256_hadd_ps(m_sum, m_sum));
+          int count = 128 / 8;
+          float sum = 0.0;
+          // std::cout << "p1_ptr : " << p1_ptr[0] << std::endl;
+          // std::cout << "p2_ptr : " << p2_ptr[0] << std::endl;
+          asm("lea (%%rax), %%r8;"
+              "lea (%%rbx), %%r9;"
+              //"movq 0x10, %%r10;"
+              /*
+              "loop:\t "
+              "flds (%%r8);"
+              "flds 0x4(%%r8);"
+              "flds 0x8(%%r8);"
+              "flds 0xC(%%r8);"
+              "flds 0x10(%%r8);"
+              "flds 0x14(%%r8);"
+              "flds 0x18(%%r8);"
+              "flds 0x1C(%%r8);"
+              "faddp;"
+              "faddp;"
+              "faddp;"
+              "faddp;"
+              "faddp;"
+              "faddp;"
+              "faddp;"
+              "lea 0x20(%%r8), %%r8;"
+              "lea 0x20(%%r9), %%r9;"
+              "decq %%r10;"
+              "jnz loop;"
+              */
+              //"fstps %0;"
+              : "=m"(sum)
+              : "r"(count), "a"(p1_ptr), "b"(p2_ptr)
+              : "%r8", "%r9", "%r10");
 
           if (sum < second_min_distance[i]) {
             second_min_distance[i] = sum;
