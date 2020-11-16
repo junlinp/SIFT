@@ -56,7 +56,7 @@ TEST(Gaussian, Blur) {
 TEST(Match, match) {
   std::vector<Descriptor> lhs;
   std::vector<int> shuffle;
-  int n = 1024 * 16;
+  int n = 128;
   std::default_random_engine engine;
   std::uniform_real_distribution<float> uniform_d(0, 255);
   for (int i = 0; i < n; i++) {
